@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <vector>
 
-#include "tqdm.hpp"
+#include "tqdmcpp/tqdmcpp.hpp"
 
 const int sleep_time = 200;
 
