@@ -30,6 +30,8 @@ void test_rvalue()
 {
     auto T = tq::tqdm(get_vector(5000));
     T.set_prefix("tqdm from rvalue ");
+    T.set_theme_basic();
+    T.disable_colors();
     for (auto t : T)
     {
         usleep(sleep_time);
@@ -41,7 +43,9 @@ void test_lvalue()
 {
     auto A = get_vector(5000);
     auto T = tq::tqdm(A);
+    T.set_theme_original();
     T.set_prefix("tqdm from lvalue ");
+    T.disable_color_transition();
     for (auto&& t : T)
     {
         t *= 2;
@@ -54,6 +58,7 @@ void test_lvalue_2()
 {
     auto A = get_set(5000);
     auto T = tq::tqdm(A);
+    T.set_theme_circle();
     T.set_prefix("tqdm from lvalue ");
     for (auto&& t : T)
     {
@@ -68,6 +73,7 @@ void test_constlvalue()
     const std::vector<int> A = get_vector(5000);
     auto T = tq::tqdm(A);
     T.set_prefix("tqdm from const lvalue ");
+    T.set_theme_circle();
     for (auto&& t : T)
     {
         usleep(sleep_time);

@@ -2,6 +2,7 @@
 
 /*
  *Copyright (c) 2018-2019 <Miguel Raggi> <mraggi@gmail.com>
+ *Modified by <Gilhwan Kang> <gilhwan@hyundai.com>
  *
  *Permission is hereby granted, free of charge, to any person
  *obtaining a copy of this software and associated documentation
@@ -25,6 +26,8 @@
  *OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include <sys/ioctl.h>
+
 #include <chrono>
 #include <cmath>
 #include <iomanip>
@@ -32,6 +35,7 @@
 #include <iterator>
 #include <sstream>
 #include <type_traits>
+#include <vector>
 
 // -------------------- chrono stuff --------------------
 
@@ -82,6 +86,7 @@ inline void clamp(double& x, double a, double b)
 class progress_bar
 {
 public:
+    progress_bar() { set_theme_braille(); }
     void restart()
     {
         chronometer_.reset();
@@ -92,19 +97,68 @@ public:
     {
         clamp(progress, 0, 1);
 
+        suffix_.str("");
+
         if (time_since_refresh() > min_time_per_update_ || progress == 0 ||
             progress == 1)
         {
             reset_refresh_timer();
             display(progress);
         }
-        suffix_.str("");
     }
 
     void set_ostream(std::ostream& os) { os_ = &os; }
     void set_prefix(std::string s) { prefix_ = std::move(s); }
-    void set_bar_size(int size) { bar_size_ = size; }
+    void set_bar_size(int size)
+    {
+        int width = []() {
+            struct winsize win{};
+            ioctl(0, TIOCGWINSZ, &win);
+            unsigned short width = win.ws_col;
+            // return the space left for process bar
+            // '60' is an experience value to exclude other output info, such as
+            // percent, time elapsed, etc.
+            return std::max((int)width - 60, 1);
+        }();
+        bar_size_ = std::min(size, width);
+    }
+
     void set_min_update_time(double time) { min_time_per_update_ = time; }
+
+    void set_theme_original()
+    {
+        bars_ = {" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"};
+    }
+    void set_theme_line()
+    {
+        bars_ = {"─", "─", "─", "╾", "╾", "╾", "╾", "━", "═"};
+    }
+    void set_theme_circle()
+    {
+        bars_ = {" ", "◓", "◑", "◒", "◐", "◓", "◑", "◒", "#"};
+    }
+    void set_theme_braille()
+    {
+        bars_ = {" ", "⡀", "⡄", "⡆", "⡇", "⡏", "⡟", "⡿", "⣿"};
+    }
+    void set_theme_braille_spin()
+    {
+        bars_ = {" ", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠇", "⠿"};
+    }
+    void set_theme_vertical()
+    {
+        bars_ = {"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█", "█"};
+    }
+    void set_theme_basic()
+    {
+        bars_ = {" ", " ", " ", " ", " ", " ", " ", " ", "#"};
+    }
+    void enable_colors() { use_colors_ = true; }
+    void disable_colors() { use_colors_ = false; }
+    void enable_color_transition() { color_transition_ = true; }
+    void disable_color_transition() { color_transition_ = false; }
+    void set_total_iters(index total) { total_iters_ = total; }
+    void set_current_iters(index current) { current_iters_ = current; }
 
     template <class T>
     progress_bar& operator<<(const T& t)
@@ -115,40 +169,148 @@ public:
 
     double elapsed_time() const { return chronometer_.peek(); }
 
+    void finish()
+    {
+        if (os_) { (*os_) << '\n' << std::flush; }
+    }
+
 private:
+    void hsv_to_rgb(float h, float s, float v, int& r, int& g, int& b) const
+    {
+        if (s < 1e-6)
+        {
+            v *= 255.f;
+            r = (int)v;
+            g = (int)v;
+            b = (int)v;
+            return;
+        }
+        int i = (int)(h * 6.0f);
+        float f = (h * 6.f) - (float)i;
+        int p = (int)(255.0f * (v * (1. - s)));
+        int q = (int)(255.0f * (v * (1. - s * f)));
+        int t = (int)(255.0f * (v * (1. - s * (1. - f))));
+        v *= 255.f;
+        i %= 6;
+        int vi = (int)v;
+        if (i == 0)
+        {
+            r = vi;
+            g = t;
+            b = p;
+        }
+        else if (i == 1)
+        {
+            r = q;
+            g = vi;
+            b = p;
+        }
+        else if (i == 2)
+        {
+            r = p;
+            g = vi;
+            b = t;
+        }
+        else if (i == 3)
+        {
+            r = p;
+            g = q;
+            b = vi;
+        }
+        else if (i == 4)
+        {
+            r = t;
+            g = p;
+            b = vi;
+        }
+        else if (i == 5)
+        {
+            r = vi;
+            g = p;
+            b = q;
+        }
+    }
+
     void display(double progress)
     {
         auto flags = os_->flags();
 
         double t = chronometer_.peek();
-        double eta = t/progress - t;
+        double eta = t / progress - t;
 
         std::stringstream bar;
 
-        bar << '\r' << prefix_ << '{' << std::fixed << std::setprecision(1)
-            << std::setw(5) << 100*progress << "%} ";
+        // prefix
+        bar << '\r' << "\033[1m" << std::setw(20) << std::left << prefix_
+            << "\033[0m" << ": "
+            << "\033[1m\033[31m" << std::fixed << std::setprecision(1)
+            << std::setw(5) << 100 * progress << "%" << "\033[0m" << " ";
+
+        // color
+        if (use_colors_)
+        {
+            if (color_transition_)
+            {
+                int r = 255, g = 255, b = 255;
+                float pct = static_cast<float>(progress * 100.0);
+                hsv_to_rgb(0.0f + 0.01f * pct / 3.0f, 0.65f, 1.0f, r, g, b);
+                bar << "\033[38;2;" << r << ";" << g << ";" << b << "m";
+            }
+            else { bar << "\033[32m"; }
+        }
 
         print_bar(bar, progress);
 
-        bar << " (" << t << "s < " << eta << "s) ";
+        if (use_colors_) { bar << "\033[0m"; }
+
+        std::string suffix = std::to_string(current_iters_) + "/" +
+          std::to_string(total_iters_);
+
+        bar << " " << suffix << " [" << t << "s < " << eta << "s] ";
 
         std::string sbar = bar.str();
-        std::string suffix = suffix_.str();
 
-        index out_size = sbar.size() + suffix.size();
+        // index out_size = sbar.size() + suffix.size();
+        index out_size = sbar.size();
         term_cols_ = std::max(term_cols_, out_size);
         index num_blank = term_cols_ - out_size;
 
-        (*os_) << sbar << suffix << std::string(num_blank, ' ') << std::flush;
+        // (*os_) << sbar << suffix << std::string(num_blank, ' ') <<
+        // std::flush;
+        // (*os_) << suffix << sbar << std::string(num_blank, ' ') <<
+        // std::flush;
+        (*os_) << sbar << std::string(num_blank, ' ') << std::flush;
 
         os_->flags(flags);
     }
 
     void print_bar(std::stringstream& ss, double filled) const
     {
-        auto num_filled = static_cast<index>(std::round(filled*bar_size_));
-        ss << '[' << std::string(num_filled, '#')
-           << std::string(bar_size_ - num_filled, ' ') << ']';
+        double fills = filled * bar_size_;
+        int ifills = static_cast<int>(fills);
+
+        ss << '|';
+        for (int i = 0; i < ifills; i++)
+        {
+            ss << bars_[8];
+        }
+
+        if (ifills < bar_size_ && filled < 1.0)
+        {
+            double partial = fills - ifills;
+            int braille_index = static_cast<int>(partial * 8);
+            if (braille_index >= 0 && braille_index < 8)
+            {
+                ss << bars_[braille_index];
+            }
+            ifills++;
+        }
+
+        for (int i = ifills; i < bar_size_; i++)
+        {
+            ss << bars_[0];
+        }
+        ss << '|';
     }
 
     double time_since_refresh() const { return refresh_.peek(); }
@@ -156,7 +318,7 @@ private:
 
     Chronometer chronometer_{};
     Chronometer refresh_{};
-    double min_time_per_update_{0.15}; // found experimentally
+    double min_time_per_update_{0.05}; // found experimentally
 
     std::ostream* os_{&std::cerr};
 
@@ -165,6 +327,12 @@ private:
 
     std::string prefix_{};
     std::stringstream suffix_{};
+
+    std::vector<std::string> bars_{};
+    bool use_colors_{true};
+    bool color_transition_{true};
+    index total_iters_{0};
+    index current_iters_{0};
 };
 
 // -------------------- iter_wrapper --------------------
@@ -223,21 +391,33 @@ public:
 
     tqdm_for_lvalues(ForwardIter begin, EndIter end)
         : first_(begin, this), last_(end), num_iters_(std::distance(begin, end))
-    {}
+    {
+        bar_.set_total_iters(num_iters_);
+        bar_.set_bar_size(bar_size_);
+    }
 
     tqdm_for_lvalues(ForwardIter begin, EndIter end, index total)
         : first_(begin, this), last_(end), num_iters_(total)
-    {}
+    {
+        bar_.set_total_iters(num_iters_);
+        bar_.set_bar_size(bar_size_);
+    }
 
     template <class Container>
     explicit tqdm_for_lvalues(Container& C)
         : first_(C.begin(), this), last_(C.end()), num_iters_(C.size())
-    {}
+    {
+        bar_.set_total_iters(num_iters_);
+        bar_.set_bar_size(bar_size_);
+    }
 
     template <class Container>
     explicit tqdm_for_lvalues(const Container& C)
         : first_(C.begin(), this), last_(C.end()), num_iters_(C.size())
-    {}
+    {
+        bar_.set_total_iters(num_iters_);
+        bar_.set_bar_size(bar_size_);
+    }
 
     tqdm_for_lvalues(const tqdm_for_lvalues&) = delete;
     tqdm_for_lvalues(tqdm_for_lvalues&&) = delete;
@@ -260,6 +440,9 @@ public:
     void update()
     {
         ++iters_done_;
+        //TODO : check 
+        if (iters_done_ > num_iters_) { iters_done_ = num_iters_; }
+        bar_.set_current_iters(iters_done_);
         bar_.update(calc_progress());
     }
 
@@ -267,6 +450,17 @@ public:
     void set_prefix(std::string s) { bar_.set_prefix(std::move(s)); }
     void set_bar_size(int size) { bar_.set_bar_size(size); }
     void set_min_update_time(double time) { bar_.set_min_update_time(time); }
+    void set_theme_original() { bar_.set_theme_original(); }
+    void set_theme_line() { bar_.set_theme_line(); }
+    void set_theme_circle() { bar_.set_theme_circle(); }
+    void set_theme_braille() { bar_.set_theme_braille(); }
+    void set_theme_braille_spin() { bar_.set_theme_braille_spin(); }
+    void set_theme_vertical() { bar_.set_theme_vertical(); }
+    void set_theme_basic() { bar_.set_theme_basic(); }
+    void enable_colors() { bar_.enable_colors(); }
+    void disable_colors() { bar_.disable_colors(); }
+    void enable_color_transition() { bar_.enable_color_transition(); }
+    void disable_color_transition() { bar_.disable_color_transition(); }
 
     template <class T>
     tqdm_for_lvalues& operator<<(const T& t)
@@ -278,7 +472,14 @@ public:
     void manually_set_progress(double to)
     {
         clamp(to, 0, 1);
-        iters_done_ = std::round(to*num_iters_);
+        iters_done_ = std::round(to * num_iters_);
+    }
+
+    void finish()
+    {
+        iters_done_ = num_iters_;
+        bar_.set_current_iters(iters_done_);
+        bar_.finish();
     }
 
 private:
@@ -286,12 +487,13 @@ private:
     {
         double denominator = num_iters_;
         if (num_iters_ == 0) denominator += 1e-9;
-        return iters_done_/denominator;
+        return iters_done_ / denominator;
     }
 
     iterator first_;
     EndIter last_;
     index num_iters_{0};
+    int bar_size_{25};
     index iters_done_{0};
     progress_bar bar_;
 };
@@ -327,6 +529,17 @@ public:
     void set_prefix(std::string s) { tqdm_.set_prefix(std::move(s)); }
     void set_bar_size(int size) { tqdm_.set_bar_size(size); }
     void set_min_update_time(double time) { tqdm_.set_min_update_time(time); }
+    void set_theme_original() { tqdm_.set_theme_original(); }
+    void set_theme_line() { tqdm_.set_theme_line(); }
+    void set_theme_circle() { tqdm_.set_theme_circle(); }
+    void set_theme_braille() { tqdm_.set_theme_braille(); }
+    void set_theme_braille_spin() { tqdm_.set_theme_braille_spin(); }
+    void set_theme_vertical() { tqdm_.set_theme_vertical(); }
+    void set_theme_basic() { tqdm_.set_theme_basic(); }
+    void enable_colors() { tqdm_.enable_colors(); }
+    void disable_colors() { tqdm_.disable_colors(); }
+    void enable_color_transition() { tqdm_.enable_color_transition(); }
+    void disable_color_transition() { tqdm_.disable_color_transition(); }
 
     template <class T>
     auto& operator<<(const T& t)
@@ -338,13 +551,15 @@ public:
 
     void manually_set_progress(double to) { tqdm_.manually_set_progress(to); }
 
+    void finish() { tqdm_.finish(); }
+
 private:
     Container C_;
     tqdm_for_lvalues<iterator> tqdm_;
 };
 
 template <class Container>
-tqdm_for_rvalues(Container &&) -> tqdm_for_rvalues<Container>;
+tqdm_for_rvalues(Container&&) -> tqdm_for_rvalues<Container>;
 
 // -------------------- tqdm --------------------
 template <class ForwardIter>
@@ -549,7 +764,7 @@ public:
     {
         double t = bar_.elapsed_time();
 
-        bar_.update(t/num_seconds_);
+        bar_.update(t / num_seconds_);
     }
 
     void set_ostream(std::ostream& os) { bar_.set_ostream(os); }
@@ -563,6 +778,8 @@ public:
         bar_ << t;
         return *this;
     }
+
+    void finish() { bar_.finish(); }
 
 private:
     double num_seconds_;
