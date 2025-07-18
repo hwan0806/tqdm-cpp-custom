@@ -3,6 +3,8 @@ This is a custom tqdmcpp implementation integrating features from [cpptqdm](http
 - Supports adaptive progress bar sizing.
 - Includes various themes as supported by cpptqdm.
 - Adds color options as provided by cpptqdm.
+- Highlights percentage value with color.
+- Displays current iteration progress (e.g., 42/100).
 
 # Easy progress bars!
 Create CLI progress bars easily!
