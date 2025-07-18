@@ -4,7 +4,7 @@ build*
 *.kate-swp
 *CMakeCache*
 *cmake_install*
-*CMake*
+# *CMake*
 Makefile
 *old*
 .project
